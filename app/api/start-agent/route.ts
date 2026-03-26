@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { channelName, uid } = body;
+  const { channelName } = body;
   const restCfg = getConvoAiRestConfig();
   const agentCfg = getConvoAiAgentConfig();
   const botUid = restCfg.botUid;
@@ -45,34 +45,50 @@ export async function POST(req: NextRequest) {
       remote_rtc_uids: ["*"],
       idle_timeout: 300,
       asr: { language: "en-US" },
+      
       llm: {
-        url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${agentCfg.llm.apiKey}`,
+        url: `https://generativelanguage.googleapis.com/v1beta/models/${agentCfg.llm.model}:streamGenerateContent?alt=sse&key=${agentCfg.llm.apiKey}`,
         style: "gemini",
         system_messages: [
           {
             role: "user",
-            parts: [{ text: "You are a helpful and concise AI assistant." }]
+            parts: [{ text: "You are a helpful, witty AI assistant. Keep your responses brief and natural for voice conversation." }]
           }
         ],
-        greeting_message: "Hello! How can I help you?",
+        greeting_message: "Connected. I'm ready to talk!",
         max_history: 10,
         params: {
-          model: "gemini-2.0-flash",
+          model: agentCfg.llm.model,
           temperature: 0.7,
         }
       },
+      
       tts: {
-        vendor: "elevenlabs",
+        vendor: "minimax",
         params: {
-          key: agentCfg.tts.key,
-          voice_id: agentCfg.tts.voiceId,
-          model_id: "eleven_flash_v2_5"
+          key: process.env.MINIMAX_API_KEY, // Use your MiniMax Key here
+          group_id: process.env.MINIMAX_GROUP_ID, // Use the ID you just found
+          model: "speech-01-turbo",
+          voice_setting: {
+            voice_id: "male-qn-qingse",
+            speed: 1.0,
+            vol: 1.0,
+            pitch: 0
+          }
         }
       },
+      
       turn_detection: {
-        mode: "adaptive",
+        mode: "server_vad",
         config: {
-          end_of_speech: { mode: "vad" }
+          end_of_speech: {
+            mode: "vad",
+            vad_config: {
+              threshold: 40,
+              silence_duration_ms: 800,
+              prefix_padding_ms: 200
+            }
+          }
         }
       }
     }
@@ -91,7 +107,7 @@ export async function POST(req: NextRequest) {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("--- AGORA JOIN ERROR ---", data);
+      console.error("Agora Error:", data);
       return NextResponse.json(data, { status: response.status });
     }
 
@@ -101,8 +117,7 @@ export async function POST(req: NextRequest) {
       channelName,
       botUid
     });
-
   } catch (err: any) {
-    return NextResponse.json({ error: "Fetch failed", message: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Fetch Error", message: err.message }, { status: 500 });
   }
 }

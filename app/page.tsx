@@ -1,92 +1,68 @@
-
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { ConvoSession, type TranscriptEvent } from "@/lib/client/convoSession";
 
 type ConnectState = "idle" | "connecting" | "connected" | "error";
-
-type TokenResponse = {
-  token: string;
-  appId: string;
-  botUid: number;
-  uid: number;
-  channelName: string;
-  expiresInSeconds: number;
-  error?: string;
-};
-
-type StartAgentResponse = {
-  agentId: string;
-  channelName: string;
-  uid: number;
-  botUid: number;
-  error?: string;
-};
-
-function formatTime(ts: number) {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
 
 export default function Home() {
   const sessionRef = useRef<ConvoSession | null>(null);
   const [state, setState] = useState<ConnectState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
-
-  const [channelName, setChannelName] = useState<string>("");
-  const [uid, setUid] = useState<number | null>(null);
-  const [agentId, setAgentId] = useState<string | null>(null);
-  const [statusLines, setStatusLines] = useState<string[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEvent[]>([]);
+  const [statusLines, setStatusLines] = useState<string[]>([]);
+  
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const appId = useMemo(() => process.env.NEXT_PUBLIC_AGORA_APP_ID ?? "", []);
+  const appId = process.env.NEXT_PUBLIC_AGORA_APP_ID ?? "";
 
   const pushStatus = (line: string) => {
-    setStatusLines((prev) => [...prev.slice(-30), `${formatTime(Date.now())} ${line}`]);
+    setStatusLines((prev) => [...prev.slice(-20), `${new Date().toLocaleTimeString([], { hour12: false })} - ${line}`]);
   };
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [transcript, statusLines]);
 
   const handleStart = async () => {
     if (!appId) {
-      setError("Missing NEXT_PUBLIC_AGORA_APP_ID");
-      setState("error");
+      setError("Agora App ID missing in env.");
       return;
     }
 
+    setState("connecting");
     setError(null);
     setTranscript([]);
     setStatusLines([]);
-    setMuted(false);
-    setState("connecting");
 
-    const newChannel = `support-${crypto.randomUUID()}`;
-    const newUid = Math.floor(Math.random() * 1_000_000_000) + 1;
-    setChannelName(newChannel);
-    setUid(newUid);
+    const newChannel = `live-${Math.random().toString(36).substring(7)}`;
+    const newUid = Math.floor(Math.random() * 10000) + 2000;
 
     try {
-      pushStatus("requesting token…");
+      pushStatus("Initializing tokens...");
       const tokenRes = await fetch("/api/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channelName: newChannel, uid: newUid }),
       });
-      const tokenJson = (await tokenRes.json()) as TokenResponse;
-      if (!tokenRes.ok) throw new Error(tokenJson.error ?? "token request failed");
-      if (!tokenJson.token) throw new Error("token response missing token");
-
-      pushStatus("starting agent…");
+      const tokenJson = await tokenRes.json();
+      
+      pushStatus("Starting Gemini + MiniMax Agent...");
       const startRes = await fetch("/api/start-agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channelName: newChannel, uid: newUid }),
       });
-      const startJson = (await startRes.json()) as StartAgentResponse;
-      if (!startRes.ok) throw new Error(startJson.error ?? "start-agent failed");
-      if (!startJson.agentId) throw new Error("start-agent response missing agentId");
-      setAgentId(startJson.agentId);
+      const startJson = await startRes.json();
+      if (!startRes.ok) throw new Error(startJson.reason || "Agent failed");
 
-      pushStatus("joining RTC + RTM…");
+      pushStatus("Waiting for stabilization...");
+      await new Promise((r) => setTimeout(r, 2000));
+
       const session = new ConvoSession();
       sessionRef.current = session;
 
@@ -98,126 +74,104 @@ export default function Home() {
         }
       );
 
-      pushStatus("connected");
       setState("connected");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      pushStatus("Session Live.");
+    } catch (e: any) {
+      setError(e.message);
       setState("error");
-      pushStatus(`error: ${msg}`);
-      await sessionRef.current?.disconnect().catch(() => {});
-      sessionRef.current = null;
+      pushStatus(`Error: ${e.message}`);
     }
   };
 
   const handleStop = async () => {
     setState("idle");
-    setMuted(false);
-    pushStatus("disconnecting…");
-
-    await sessionRef.current?.disconnect().catch(() => {});
+    pushStatus("Disconnecting...");
+    await sessionRef.current?.disconnect();
     sessionRef.current = null;
-
-    if (agentId) {
-      await fetch("/api/leave-agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId }),
-      }).catch(() => {});
-    }
-
-    setAgentId(null);
-    pushStatus("disconnected");
-  };
-
-  const handleToggleMute = async () => {
-    const next = !muted;
-    setMuted(next);
-    await sessionRef.current?.setMuted(next).catch(() => {});
   };
 
   return (
-    <main className="flex-1 px-6 py-10">
-      <div className="mx-auto w-full max-w-5xl space-y-6">
-        <header className="space-y-2">
-          <h1 className="text-2xl font-semibold">AI Customer Support (Voice)</h1>
-          <p className="text-sm opacity-80">
-            Starts an Agora Conversational AI agent and connects your microphone for real-time support.
-          </p>
-        </header>
+    <main className="flex h-screen w-full bg-white text-black overflow-hidden font-sans">
+      <section className="flex flex-1 flex-col items-center justify-between p-12 border-r border-gray-100 relative">
+        <div className="w-full max-w-md text-center">
+          <h1 className="text-xs font-bold tracking-[0.2em] text-gray-400 uppercase">Gemini Live</h1>
+          <p className="text-[10px] text-gray-300 mt-1 uppercase tracking-widest font-medium italic">MiniMax Voice Enabled</p>
+        </div>
 
-        <div className="flex flex-wrap gap-3">
+        <div className="relative flex items-center justify-center">
+          <div className={`absolute w-72 h-72 rounded-full transition-all duration-1000 ${
+            state === "connected" ? "bg-black/[0.03] scale-125 blur-3xl animate-pulse" : "bg-transparent"
+          }`} />
+          
+          <div className={`w-40 h-40 rounded-full border flex items-center justify-center transition-all duration-700 ${
+            state === "connected" ? "border-black scale-110 shadow-2xl bg-white" : "border-gray-100"
+          }`}>
+            <div className={`w-3 h-3 rounded-full ${
+              state === "connected" ? "bg-black animate-ping" : "bg-gray-200"
+            }`} />
+          </div>
+        </div>
+
+        <div className="w-full max-w-sm space-y-4">
           {state !== "connected" ? (
             <button
               onClick={handleStart}
               disabled={state === "connecting"}
-              className="rounded-md bg-black px-4 py-2 text-white disabled:opacity-50"
+              className="w-full py-4 rounded-2xl bg-black text-white font-semibold hover:bg-zinc-800 transition-all active:scale-95 disabled:bg-gray-100"
             >
-              {state === "connecting" ? "Connecting…" : "Start session"}
+              {state === "connecting" ? "Establishing..." : "Start Conversation"}
             </button>
           ) : (
-            <>
-              <button onClick={handleStop} className="rounded-md bg-black px-4 py-2 text-white">
-                End session
+            <div className="flex gap-3">
+              <button
+                onClick={() => setMuted(!muted)}
+                className="flex-1 py-4 rounded-2xl border border-gray-200 font-medium hover:bg-gray-50 transition-colors"
+              >
+                {muted ? "Unmute" : "Mute"}
               </button>
-              <button onClick={handleToggleMute} className="rounded-md border px-4 py-2">
-                {muted ? "Unmute mic" : "Mute mic"}
+              <button
+                onClick={handleStop}
+                className="flex-1 py-4 rounded-2xl bg-red-50 text-red-600 font-semibold hover:bg-red-100 transition-colors"
+              >
+                End
               </button>
-            </>
+            </div>
           )}
+          {error && <p className="text-center text-[11px] text-red-500 animate-shake">{error}</p>}
         </div>
+      </section>
 
-        {error ? (
-          <div className="rounded-md border border-red-500/40 bg-red-500/10 p-4 text-sm">
-            <div className="font-medium">Error</div>
-            <div className="mt-1 opacity-90">{error}</div>
+      <section className="w-[400px] bg-gray-50/50 flex flex-col h-full border-l border-gray-100">
+        <div className="p-6 border-b border-gray-100 bg-white">
+          <h2 className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Debug Console</h2>
+        </div>
+        
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth no-scrollbar">
+          <div className="space-y-2">
+            <h3 className="text-[9px] font-bold text-gray-300 uppercase">System Logs</h3>
+            <div className="font-mono text-[10px] space-y-1 text-gray-500 opacity-80">
+              {statusLines.map((l, i) => <div key={i} className="border-l-2 border-gray-200 pl-2">{l}</div>)}
+            </div>
           </div>
-        ) : null}
 
-        <div className="grid gap-6 md:grid-cols-2">
-          <section className="rounded-md border p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium">Session</h2>
-              <span className="text-xs opacity-70">{state}</span>
+          <div className="space-y-4">
+            <h3 className="text-[9px] font-bold text-gray-300 uppercase">Live Transcript</h3>
+            <div className="space-y-3">
+              {transcript.length === 0 && <p className="text-[11px] text-gray-400 italic font-mono">Waiting for stream...</p>}
+              {transcript.map((t, i) => (
+                <div key={i} className={`p-3 rounded-xl text-[12px] leading-relaxed transition-all animate-in fade-in slide-in-from-bottom-2 ${
+                  t.publisher === 'Agent' ? 'bg-black text-white self-start' : 'bg-white border border-gray-100 self-end text-gray-700'
+                }`}>
+                  <span className="block text-[8px] font-bold mb-1 opacity-50 uppercase tracking-tighter">
+                    {t.publisher}
+                  </span>
+                  {t.message}
+                </div>
+              ))}
             </div>
-            <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
-              <dt className="opacity-70">Channel</dt>
-              <dd className="col-span-2 font-mono">{channelName || "—"}</dd>
-              <dt className="opacity-70">UID</dt>
-              <dd className="col-span-2 font-mono">{uid ?? "—"}</dd>
-              <dt className="opacity-70">Agent</dt>
-              <dd className="col-span-2 font-mono">{agentId ?? "—"}</dd>
-            </dl>
-            <div className="mt-4">
-              <h3 className="text-xs font-medium opacity-80">Status</h3>
-              <div className="mt-2 max-h-56 overflow-auto rounded bg-black/5 p-2 font-mono text-[11px] leading-relaxed">
-                {statusLines.length ? statusLines.map((l, i) => <div key={i}>{l}</div>) : <div>—</div>}
-              </div>
-            </div>
-          </section>
-
-          <section className="rounded-md border p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium">Transcript (RTM)</h2>
-              <span className="text-xs opacity-70">{transcript.length}</span>
-            </div>
-            <div className="mt-3 max-h-[22rem] overflow-auto space-y-2 text-sm">
-              {transcript.length ? (
-                transcript.map((t) => (
-                  <div key={t.id} className="rounded bg-black/5 p-2">
-                    <div className="text-[11px] opacity-70">
-                      {formatTime(t.ts)} · {t.publisher}
-                    </div>
-                    <div className="mt-1 whitespace-pre-wrap break-words">{t.message}</div>
-                  </div>
-                ))
-              ) : (
-                <div className="text-sm opacity-70">No messages yet.</div>
-              )}
-            </div>
-          </section>
+          </div>
         </div>
-      </div>
+      </section>
     </main>
   );
 }
