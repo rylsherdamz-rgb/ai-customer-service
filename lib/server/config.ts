@@ -23,22 +23,7 @@ export type LlmConfig = {
   topP: number;
 };
 
-export type TtsConfig =
-  | {
-      vendor: "microsoft";
-      key: string;
-      region: string;
-      voiceName: string;
-      rate: number;
-      volume: number;
-    }
-  | {
-      vendor: "elevenlabs";
-      apiKey: string;
-      voiceId: string;
-      modelId: string;
-    }
-  | {
+export type TtsConfig = {
       vendor: "minimax";
       key: string;
       model: string;
@@ -96,18 +81,8 @@ export function getConvoAiAgentConfig(): ConvoAiAgentConfig {
     topP: envNumber("LLM_TOP_P", 0.9),
   };
 
-  const tts: TtsConfig =
-    ttsVendor === "microsoft"
-      ? {
-          vendor: "microsoft",
-          key: requireEnv("MICROSOFT_TTS_KEY"),
-          region: requireEnv("MICROSOFT_TTS_REGION"),
-          voiceName: optionalEnv("MICROSOFT_TTS_VOICE_NAME") ?? "en-US-AndrewMultilingualNeural",
-          rate: envNumber("MICROSOFT_TTS_RATE", 1.0),
-          volume: envNumber("MICROSOFT_TTS_VOLUME", 100.0),
-        }
-      : ttsVendor === "minimax"
-      ? {
+  const tts: TtsConfig = 
+      {
           vendor: "minimax",
           key: requireEnv("MINIMAX_TTS_KEY"),
           model: optionalEnv("MINIMAX_TTS_MODEL") ?? "speech-2.6-turbo",
@@ -119,12 +94,6 @@ export function getConvoAiAgentConfig(): ConvoAiAgentConfig {
           sampleRate: envNumber("MINIMAX_TTS_SAMPLE_RATE", 48000),
           groupId: optionalEnv("MINIMAX_TTS_GROUP_ID"),
         }
-      : {
-          vendor: "elevenlabs",
-          apiKey: requireEnv("ELEVENLABS_API_KEY"),
-          voiceId: requireEnv("ELEVENLABS_VOICE_ID"),
-          modelId: optionalEnv("ELEVENLABS_MODEL_ID") ?? "eleven_flash_v2_5",
-        };
 
   return { llm, tts };
 }

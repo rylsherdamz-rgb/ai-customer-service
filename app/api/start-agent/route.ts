@@ -4,37 +4,21 @@ import { getConvoAiAgentConfig, getConvoAiRestConfig } from "@/lib/server/config
 
 export const runtime = "nodejs";
 
-type StartAgentRequest = {
-  channelName: string;
-  uid: number;
-};
-
-type AgoraJoinResponse = {
-  agent_id: string;
-};
-
 function basicAuthHeader(username: string, password: string): string {
-  const encoded = Buffer.from(`${username}:${password}`).toString("base64");
-  return `Basic ${encoded}`;
+  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 }
 
 export async function POST(req: NextRequest) {
-  let body: StartAgentRequest;
+  let body;
   try {
-    body = (await req.json()) as StartAgentRequest;
+    body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const channelName = body.channelName?.trim();
-  const uid = Number(body.uid);
-  if (!channelName || !Number.isInteger(uid) || uid <= 0) {
-    return NextResponse.json({ error: "Invalid request parameters" }, { status: 400 });
-  }
-
+  const { channelName, uid } = body;
   const restCfg = getConvoAiRestConfig();
   const agentCfg = getConvoAiAgentConfig();
-  const ttl = restCfg.tokenTtlSeconds;
   const botUid = restCfg.botUid;
 
   const botToken = RtcTokenBuilder.buildTokenWithRtm2(
@@ -43,122 +27,82 @@ export async function POST(req: NextRequest) {
     channelName,
     botUid,
     RtcRole.PUBLISHER,
-    ttl,
-    ttl,
-    ttl,
-    ttl,
-    ttl,
+    restCfg.tokenTtlSeconds,
+    restCfg.tokenTtlSeconds,
+    restCfg.tokenTtlSeconds,
+    restCfg.tokenTtlSeconds,
+    restCfg.tokenTtlSeconds,
     String(botUid),
-    ttl
+    restCfg.tokenTtlSeconds
   );
 
-  const inputModalities = (process.env.NEXT_PUBLIC_INPUT_MODALITIES ?? "audio").split(",").map((s) => s.trim()).filter(Boolean);
-  const outputModalities = (process.env.NEXT_PUBLIC_OUTPUT_MODALITIES ?? "audio,text").split(",").map((s) => s.trim()).filter(Boolean);
-
-  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${agentCfg.llm.model}:streamGenerateContent?alt=sse&key=${agentCfg.llm.apiKey}`;
-
   const requestBody = {
-    name: `agent-${channelName}-${Date.now()}`,
+    name: `agent-${channelName}`,
     properties: {
       channel: channelName,
       token: botToken,
       agent_rtc_uid: String(botUid),
       remote_rtc_uids: ["*"],
-      advanced_features: {
-        enable_aivad: true,
-        enable_rtm: true,
-      },
+      idle_timeout: 300,
       asr: { language: "en-US" },
       llm: {
-        url: geminiUrl,
+        url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${agentCfg.llm.apiKey}`,
         style: "gemini",
         system_messages: [
           {
             role: "user",
-            parts: [{ text: "You are a friendly, concise support agent. Keep replies short." }]
+            parts: [{ text: "You are a helpful and concise AI assistant." }]
           }
         ],
-        greeting_message: "Hi! How can I help you today?",
-        failure_message: "I encountered an error. Please try again.",
-        max_history: 12,
-        input_modalities: inputModalities,
-        output_modalities: outputModalities,
+        greeting_message: "Hello! How can I help you?",
+        max_history: 10,
         params: {
-          model: agentCfg.llm.model,
-          max_tokens: agentCfg.llm.maxTokens,
-          temperature: agentCfg.llm.temperature,
-          top_p: agentCfg.llm.topP,
-        },
+          model: "gemini-2.0-flash",
+          temperature: 0.7,
+        }
       },
-      vad: {
-        interrupt_duration_ms: 160,
-        silence_duration_ms: 640,
-        prefix_padding_ms: 240,
+      tts: {
+        vendor: "elevenlabs",
+        params: {
+          key: agentCfg.tts.key,
+          voice_id: agentCfg.tts.voiceId,
+          model_id: "eleven_flash_v2_5"
+        }
       },
-      tts:
-        agentCfg.tts.vendor === "microsoft"
-          ? {
-              vendor: "microsoft",
-              params: {
-                key: agentCfg.tts.key,
-                region: agentCfg.tts.region,
-                voice_name: agentCfg.tts.voiceName,
-                rate: agentCfg.tts.rate,
-                volume: agentCfg.tts.volume,
-              },
-              skip_patterns: [2],
-            }
-          : agentCfg.tts.vendor === "minimax"
-          ? {
-              vendor: "minimax",
-              params: {
-                ...(agentCfg.tts.groupId ? { group_id: agentCfg.tts.groupId } : {}),
-                key: agentCfg.tts.key,
-                model: agentCfg.tts.model,
-                voice_setting: {
-                  voice_id: agentCfg.tts.voiceId,
-                  speed: agentCfg.tts.speed,
-                  vol: agentCfg.tts.volume,
-                  pitch: agentCfg.tts.pitch,
-                  emotion: agentCfg.tts.emotion,
-                  latex_render: false,
-                  english_normalization: true,
-                },
-                audio_setting: { sample_rate: agentCfg.tts.sampleRate },
-              },
-              skip_patterns: [2],
-            }
-          : {
-              vendor: "elevenlabs",
-              params: {
-                key: agentCfg.tts.apiKey,
-                voice_id: agentCfg.tts.voiceId,
-                model_id: agentCfg.tts.modelId,
-              },
-              skip_patterns: [2],
-            },
-    },
+      turn_detection: {
+        mode: "adaptive",
+        config: {
+          end_of_speech: { mode: "vad" }
+        }
+      }
+    }
   };
 
-  const response = await fetch(`${restCfg.convoAiBaseUrl}/${restCfg.appId}/join`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: basicAuthHeader(restCfg.customerId, restCfg.customerSecret),
-    },
-    body: JSON.stringify(requestBody),
-  });
+  try {
+    const response = await fetch(`${restCfg.convoAiBaseUrl}/${restCfg.appId}/join`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: basicAuthHeader(restCfg.customerId, restCfg.customerSecret),
+      },
+      body: JSON.stringify(requestBody),
+    });
 
-  if (!response.ok) {
-    const text = await response.text();
-    return NextResponse.json({ error: "Agora API error", details: text }, { status: 500 });
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error("--- AGORA JOIN ERROR ---", data);
+      return NextResponse.json(data, { status: response.status });
+    }
+
+    return NextResponse.json({
+      agentId: data.agent_id,
+      agent_id: data.agent_id,
+      channelName,
+      botUid
+    });
+
+  } catch (err: any) {
+    return NextResponse.json({ error: "Fetch failed", message: err.message }, { status: 500 });
   }
-
-  const data = (await response.json()) as AgoraJoinResponse;
-  return NextResponse.json({
-    agentId: data.agent_id,
-    channelName,
-    uid,
-    botUid,
-  });
 }
