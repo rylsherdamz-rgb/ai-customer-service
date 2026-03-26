@@ -4,8 +4,9 @@ import { getConvoAiAgentConfig, getConvoAiRestConfig } from "@/lib/server/config
 
 export const runtime = "nodejs";
 
-function basicAuthHeader(username: string, password: string): string {
-  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+function getAuthHeader(id: string, secret: string): string {
+  const credentials = `${id}:${secret}`;
+  return `Basic ${Buffer.from(credentials).toString("base64")}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -45,14 +46,13 @@ export async function POST(req: NextRequest) {
       remote_rtc_uids: ["*"],
       idle_timeout: 300,
       asr: { language: "en-US" },
-      
       llm: {
         url: `https://generativelanguage.googleapis.com/v1beta/models/${agentCfg.llm.model}:streamGenerateContent?alt=sse&key=${agentCfg.llm.apiKey}`,
         style: "gemini",
         system_messages: [
           {
             role: "user",
-            parts: [{ text: "You are a helpful, witty AI assistant. Keep your responses brief and natural for voice conversation." }]
+            parts: [{ text: "You are a helpful, witty AI assistant. Keep your responses brief and natural." }]
           }
         ],
         greeting_message: "Connected. I'm ready to talk!",
@@ -62,12 +62,11 @@ export async function POST(req: NextRequest) {
           temperature: 0.7,
         }
       },
-      
       tts: {
         vendor: "minimax",
         params: {
-          key: process.env.MINIMAX_API_KEY, // Use your MiniMax Key here
-          group_id: process.env.MINIMAX_GROUP_ID, // Use the ID you just found
+          key: process.env.MINIMAX_API_KEY,
+          group_id: process.env.MINIMAX_GROUP_ID,
           model: "speech-01-turbo",
           voice_setting: {
             voice_id: "male-qn-qingse",
@@ -77,7 +76,6 @@ export async function POST(req: NextRequest) {
           }
         }
       },
-      
       turn_detection: {
         mode: "server_vad",
         config: {
@@ -95,11 +93,14 @@ export async function POST(req: NextRequest) {
   };
 
   try {
-    const response = await fetch(`${restCfg.convoAiBaseUrl}/${restCfg.appId}/join`, {
+    const authHeader = getAuthHeader(restCfg.customerId, restCfg.customerSecret);
+    const apiUrl = `${restCfg.convoAiBaseUrl}/${restCfg.appId}/join`;
+
+    const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: basicAuthHeader(restCfg.customerId, restCfg.customerSecret),
+        "Authorization": authHeader,
       },
       body: JSON.stringify(requestBody),
     });
@@ -107,13 +108,14 @@ export async function POST(req: NextRequest) {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("Agora Error:", data);
+      console.error("401 Check - CustomerID:", restCfg.customerId);
+      console.error("401 Check - API URL:", apiUrl);
+      console.error("Agora Response:", data);
       return NextResponse.json(data, { status: response.status });
     }
 
     return NextResponse.json({
       agentId: data.agent_id,
-      agent_id: data.agent_id,
       channelName,
       botUid
     });
