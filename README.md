@@ -1,5 +1,13 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Environment setup
+
+Copy `.env.example` to `.env` and fill in the values.
+
+Important: do **not** use `NEXT_PUBLIC_` for secrets (App Certificate, Customer Secret, LLM API keys, TTS keys). If you already did, rotate those credentials.
+
+`TTS_VENDOR` chooses `"microsoft"`, `"elevenlabs"`, or `"minimax"` and toggles which server-only TTS credentials you must define (see `.env.example`). The app automatically passes the correct SDK configuration to Agora Conversational AI so you can use the same MiniMax key for both chat + TTS if you prefer.
+
 ## Getting Started
 
 First, run the development server:
