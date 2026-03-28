@@ -7,6 +7,8 @@ type ConnectState = "idle" | "connecting" | "connected" | "error";
 
 export default function Home() {
   const sessionRef = useRef<ConvoSession | null>(null);
+  const agentIdRef = useRef<string | null>(null);
+  const debugPollRef = useRef<number | null>(null);
   const [state, setState] = useState<ConnectState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
@@ -17,7 +19,13 @@ export default function Home() {
   const appId = process.env.NEXT_PUBLIC_AGORA_APP_ID ?? "";
 
   const pushStatus = (line: string) => {
-    setStatusLines((prev) => [...prev.slice(-20), `${new Date().toLocaleTimeString([], { hour12: false })} - ${line}`]);
+    console.log(`[UI] ${line}`);
+    setStatusLines((prev) => [...prev.slice(-60), `${new Date().toLocaleTimeString([], { hour12: false })} - ${line}`]);
+  };
+
+  const getErrorMessage = (err: unknown) => {
+    if (err instanceof Error) return err.message;
+    return typeof err === "string" ? err : JSON.stringify(err);
   };
 
   useEffect(() => {
@@ -25,6 +33,45 @@ export default function Home() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [transcript, statusLines]);
+
+  const stopDebugPolling = () => {
+    if (debugPollRef.current) {
+      window.clearInterval(debugPollRef.current);
+      debugPollRef.current = null;
+    }
+  };
+
+  const fetchAgentDebug = async (agentId: string) => {
+    const res = await fetch(`/api/agent-debug?agentId=${encodeURIComponent(agentId)}`, {
+      cache: "no-store",
+    });
+    const data = await res.json();
+    pushStatus(`Agent debug poll HTTP ${res.status}`);
+    if (data?.statusSummary?.status) {
+      pushStatus(`Agent state: ${data.statusSummary.status}`);
+    }
+    if (typeof data?.historySummary?.historyCount === "number") {
+      pushStatus(`Agent history items: ${data.historySummary.historyCount}`);
+    }
+    if (typeof data?.historySummary?.userTurnCount === "number") {
+      pushStatus(`User turns seen by agent: ${data.historySummary.userTurnCount}`);
+    }
+    if (typeof data?.historySummary?.assistantTurnCount === "number") {
+      pushStatus(`Assistant turns produced: ${data.historySummary.assistantTurnCount}`);
+    }
+    if (data?.historySummary?.firstContent) {
+      pushStatus(`Agent first history entry: ${JSON.stringify(data.historySummary.firstContent)}`);
+    }
+    if (data?.historySummary?.latestContent) {
+      pushStatus(`Agent latest history entry: ${JSON.stringify(data.historySummary.latestContent)}`);
+    }
+    if (data?.statusSummary?.message) {
+      pushStatus(`Agent status message: ${data.statusSummary.message}`);
+    }
+    if (data?.historySummary?.message) {
+      pushStatus(`Agent history message: ${data.historySummary.message}`);
+    }
+  };
 
   const handleStart = async () => {
     if (!appId) {
@@ -48,16 +95,29 @@ export default function Home() {
         body: JSON.stringify({ channelName: newChannel, uid: userUid }),
       });
       const tokenJson = await tokenRes.json();
+      pushStatus(`Token ready for channel=${tokenJson.channelName}, uid=${tokenJson.uid}`);
       
       pushStatus("Requesting Agent entry...");
       const startRes = await fetch("/api/start-agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channelName: newChannel }), // Removed uid: newUid to let server use botUid
+        body: JSON.stringify({ channelName: newChannel, uid: userUid }),
       });
       
       const startJson = await startRes.json();
+      pushStatus(`Agent join HTTP ${startRes.status}`);
+      if (startJson?.debug) {
+        pushStatus(`Agent debug keys: ${JSON.stringify(startJson.debug.keys ?? [])}`);
+        if (startJson.debug.agentId) pushStatus(`Agent ID: ${startJson.debug.agentId}`);
+        if (startJson.debug.status) pushStatus(`Agent status: ${startJson.debug.status}`);
+        if (startJson.debug.message) pushStatus(`Agent message: ${startJson.debug.message}`);
+        if (startJson.debug.detail) pushStatus(`Agent detail: ${JSON.stringify(startJson.debug.detail)}`);
+      }
       if (!startRes.ok) throw new Error(startJson.reason || "Agent failed to start");
+      if (startJson?.agentId) {
+        agentIdRef.current = startJson.agentId;
+        pushStatus(`Tracking agent ${startJson.agentId}`);
+      }
 
       pushStatus("Connecting to RTC/RTM...");
       const session = new ConvoSession();
@@ -80,19 +140,34 @@ export default function Home() {
 
       setState("connected");
       pushStatus("Conversation Live.");
-    } catch (e: any) {
-      setError(e.message);
+      if (agentIdRef.current) {
+        await fetchAgentDebug(agentIdRef.current);
+        debugPollRef.current = window.setInterval(() => {
+          if (agentIdRef.current) {
+            void fetchAgentDebug(agentIdRef.current);
+          }
+        }, 5000);
+      }
+    } catch (e: unknown) {
+      const message = getErrorMessage(e);
+      setError(message);
       setState("error");
-      pushStatus(`Failure: ${e.message}`);
+      pushStatus(`Failure: ${message}`);
     }
   };
 
   const handleStop = async () => {
     setState("idle");
+    stopDebugPolling();
     pushStatus("Closing session...");
     await sessionRef.current?.disconnect();
     sessionRef.current = null;
+    agentIdRef.current = null;
   };
+
+  useEffect(() => {
+    return () => stopDebugPolling();
+  }, []);
 
   useEffect(() => {
     if (sessionRef.current) {

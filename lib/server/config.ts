@@ -27,6 +27,7 @@ export type TtsConfig = {
       vendor: "minimax";
       key: string;
       model: string;
+      url: string;
       voiceId: string;
       speed: number;
       volume: number;
@@ -85,7 +86,8 @@ export function getConvoAiAgentConfig(): ConvoAiAgentConfig {
       {
           vendor: "minimax",
           key: requireEnv("MINIMAX_TTS_KEY"),
-          model: optionalEnv("MINIMAX_TTS_MODEL") ?? "speech-2.6-turbo",
+          model: optionalEnv("MINIMAX_TTS_MODEL") ?? "speech-02-turbo",
+          url: optionalEnv("MINIMAX_TTS_URL") ?? "wss://api-uw.minimax.io/ws/v1/t2a_v2",
           voiceId: requireEnv("MINIMAX_TTS_VOICE_ID"),
           speed: envNumber("MINIMAX_TTS_SPEED", 1.0),
           volume: envNumber("MINIMAX_TTS_VOLUME", 1.0),

@@ -17,56 +17,121 @@ export type ConvoConnectParams = {
   uid: number;
 };
 
+type StatusHandler = (status: string) => void;
+
+type TranscriptHandler = (event: TranscriptEvent) => void;
+
+type RtmStatusEvent = {
+  state?: string;
+  reason?: string;
+};
+
+type RtmMessageEvent = {
+  message?: unknown;
+  publisher?: string;
+  channelName?: string;
+  customType?: string;
+};
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return typeof err === "string" ? err : JSON.stringify(err);
+}
+
+function pushDebugStatus(onStatus: StatusHandler | undefined, status: string) {
+  console.log(`[ConvoSession] ${status}`);
+  onStatus?.(status);
+}
+
 export class ConvoSession {
   private rtcClient: IAgoraRTCClient | null = null;
   private localAudioTrack: ILocalAudioTrack | null = null;
-  private rtm: any = null;
+  private rtm: {
+    addEventListener: (event: string, cb: (...args: unknown[]) => void) => void;
+    login: (params: { token: string }) => Promise<void>;
+    subscribe: (channelName: string) => Promise<void>;
+    unsubscribe: (channelName: string) => Promise<void>;
+    logout: () => Promise<void>;
+  } | null = null;
   private subscribedChannel: string | null = null;
 
   async connect(
     params: ConvoConnectParams,
     opts?: {
-      onTranscript?: (event: TranscriptEvent) => void;
-      onStatus?: (status: string) => void;
+      onTranscript?: TranscriptHandler;
+      onStatus?: StatusHandler;
     }
   ) {
     const { appId, channelName, token, uid } = params;
+    pushDebugStatus(opts?.onStatus, `Preparing session for channel=${channelName}, uid=${uid}`);
 
     const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
     this.rtcClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+    pushDebugStatus(opts?.onStatus, "RTC client created.");
+
+    this.rtcClient.enableAudioVolumeIndicator();
 
     this.rtcClient.on("user-published", async (user, mediaType) => {
       if (!this.rtcClient) return;
+      pushDebugStatus(opts?.onStatus, `RTC remote published: uid=${String(user.uid)}, media=${mediaType}`);
       await this.rtcClient.subscribe(user, mediaType);
       
       if (mediaType === "audio") {
-        opts?.onStatus?.("Agent audio track subscribed.");
+        pushDebugStatus(opts?.onStatus, `Agent audio track subscribed from uid=${String(user.uid)}.`);
         user.audioTrack?.play();
       }
     });
 
-    this.rtcClient.on("connection-state-change", (cur, prev, reason) => {
-      opts?.onStatus?.(`RTC: ${prev} -> ${cur} ${reason || ""}`);
+    this.rtcClient.on("user-joined", (user) => {
+      pushDebugStatus(opts?.onStatus, `RTC remote joined: uid=${String(user.uid)}`);
     });
 
+    this.rtcClient.on("user-left", (user, reason) => {
+      pushDebugStatus(opts?.onStatus, `RTC remote left: uid=${String(user.uid)} reason=${reason ?? "unknown"}`);
+    });
+
+    this.rtcClient.on("user-unpublished", (user, mediaType) => {
+      pushDebugStatus(opts?.onStatus, `RTC remote unpublished: uid=${String(user.uid)}, media=${mediaType}`);
+    });
+
+    this.rtcClient.on("volume-indicator", (volumes) => {
+      const localEntry = volumes.find((entry) => String(entry.uid) === String(uid));
+      if (localEntry) {
+        pushDebugStatus(opts?.onStatus, `Mic level=${localEntry.level}`);
+      }
+    });
+
+    this.rtcClient.on("connection-state-change", (cur, prev, reason) => {
+      pushDebugStatus(opts?.onStatus, `RTC: ${prev} -> ${cur} ${reason || ""}`.trim());
+    });
+
+    pushDebugStatus(opts?.onStatus, "Joining RTC...");
     await this.rtcClient.join(appId, channelName, token, uid);
+    pushDebugStatus(opts?.onStatus, "RTC join successful.");
 
     try {
       this.localAudioTrack = await AgoraRTC.createMicrophoneAudioTrack({
         encoderConfig: "speech_standard",
       });
       await this.rtcClient.publish([this.localAudioTrack]);
-      opts?.onStatus?.("Microphone published.");
-    } catch (err: any) {
-      opts?.onStatus?.(`Mic Error: ${err.message}`);
+      pushDebugStatus(opts?.onStatus, "Microphone published.");
+    } catch (err: unknown) {
+      pushDebugStatus(opts?.onStatus, `Mic Error: ${getErrorMessage(err)}`);
     }
 
     try {
       const AgoraRTM = (await import("agora-rtm-sdk")).default;
       this.rtm = new AgoraRTM.RTM(appId, String(uid));
+      pushDebugStatus(opts?.onStatus, "RTM client created.");
 
-      this.rtm.addEventListener("message", (event: any) => {
-        const msgContent = typeof event.message === 'string' ? event.message : JSON.stringify(event.message);
+      this.rtm.addEventListener("message", (...args: unknown[]) => {
+        const event = (args[0] ?? {}) as RtmMessageEvent;
+        const msgContent =
+          typeof event.message === "string" ? event.message : JSON.stringify(event.message);
+        pushDebugStatus(
+          opts?.onStatus,
+          `RTM message received from ${event.publisher ?? "unknown"} on ${event.channelName ?? channelName}`
+        );
         opts?.onTranscript?.({
           id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
           ts: Date.now(),
@@ -75,16 +140,23 @@ export class ConvoSession {
         });
       });
 
-      this.rtm.addEventListener("status", (event: any) => {
-        opts?.onStatus?.(`RTM Status: ${event.state}`);
+      this.rtm.addEventListener("status", (...args: unknown[]) => {
+        const event = (args[0] ?? {}) as RtmStatusEvent;
+        pushDebugStatus(
+          opts?.onStatus,
+          `RTM Status: ${event.state ?? "unknown"}${event.reason ? ` (${event.reason})` : ""}`
+        );
       });
 
-      await this.rtm.login({ token: token }); 
+      pushDebugStatus(opts?.onStatus, "Logging into RTM...");
+      await this.rtm.login({ token });
+      pushDebugStatus(opts?.onStatus, "RTM login successful.");
+      pushDebugStatus(opts?.onStatus, `Subscribing to RTM channel=${channelName}...`);
       await this.rtm.subscribe(channelName);
       this.subscribedChannel = channelName;
-      opts?.onStatus?.("Messaging system active.");
-    } catch (err: any) {
-      opts?.onStatus?.(`RTM Init Failed: ${err.message}`);
+      pushDebugStatus(opts?.onStatus, "Messaging system active.");
+    } catch (err: unknown) {
+      pushDebugStatus(opts?.onStatus, `RTM Init Failed: ${getErrorMessage(err)}`);
     }
   }
 
