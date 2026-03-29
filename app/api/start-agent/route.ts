@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
   const restCfg = getConvoAiRestConfig();
   const agentCfg = getConvoAiAgentConfig();
   const botUid = restCfg.botUid;
+  const agentRtmUid = `${botUid}-${channelName}`;
 
   const botToken = RtcTokenBuilder.buildTokenWithRtm2(
     restCfg.appId,
@@ -67,10 +68,12 @@ export async function POST(req: NextRequest) {
       channel: channelName,
       token: botToken,
       agent_rtc_uid: String(botUid),
-      remote_rtc_uids: [String(userUid)],
+      agent_rtm_uid: agentRtmUid,
+      remote_rtc_uids: ["*"],
       advanced_features: {
         enable_rtm: true,
       },
+      enable_string_uid: false,
       idle_timeout: 300,
       asr: {
         vendor: "ares",
@@ -78,19 +81,24 @@ export async function POST(req: NextRequest) {
         task: "conversation",
       },
       llm: {
-        url: `https://generativelanguage.googleapis.com/v1beta/models/${agentCfg.llm.model}:generateContent?alt=sse&key=${agentCfg.llm.apiKey}`,
+        url: agentCfg.llm.url,
+        api_key: agentCfg.llm.apiKey,
         style: "gemini",
         system_messages: [
           {
-            role: "user",
-            parts: [{ text: "You are a helpful, witty AI assistant. Keep your responses brief and natural." }]
-          }
+            role: "system",
+            content: "You are a helpful, witty AI assistant. Keep your responses brief and natural.",
+          },
         ],
         greeting_message: "Connected. I'm ready to talk!",
         failure_message: "Hold on a second.",
         max_history: 32,
+        ignore_empty: true,
         params: {
           model: agentCfg.llm.model,
+          max_output_tokens: agentCfg.llm.maxTokens,
+          temperature: agentCfg.llm.temperature,
+          top_p: agentCfg.llm.topP,
         }
       },
       tts: {
@@ -110,20 +118,22 @@ export async function POST(req: NextRequest) {
           sample_rate: agentCfg.tts.sampleRate,
         }
       },
+      parameters: {
+        transcript: {
+          enable: true,
+          protocol_version: "v2",
+          enable_words: false,
+        },
+        enable_dump: true,
+      },
       turn_detection: {
-        mode: "server_vad",
         config: {
           end_of_speech: {
-            mode: "vad",
-            vad_config: {
-              threshold: 20,
-              silence_duration_ms: 800,
-              prefix_padding_ms: 200
-            }
-          }
-        }
-      }
-    }
+            mode: "semantic",
+          },
+        },
+      },
+    },
   };
 
   try {
@@ -134,11 +144,14 @@ export async function POST(req: NextRequest) {
       channelName,
       userUid,
       botUid,
+      agentRtmUid,
       ttsVendor: agentCfg.tts.vendor,
       ttsModel: agentCfg.tts.model,
       ttsUrl: agentCfg.tts.url,
       ttsVoiceId: agentCfg.tts.voiceId.trim(),
+      ttsGroupIdPresent: Boolean(agentCfg.tts.groupId),
       llmModel: agentCfg.llm.model,
+      llmUrl: agentCfg.llm.url.replace(agentCfg.llm.apiKey, "<redacted>"),
     });
 
     const response = await fetch(apiUrl, {
@@ -171,6 +184,7 @@ export async function POST(req: NextRequest) {
       agentId: data.agent_id,
       channelName,
       botUid,
+      agentRtmUid,
       debug,
     });
   } catch (err: unknown) {

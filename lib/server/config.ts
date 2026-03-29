@@ -18,6 +18,7 @@ export type ConvoAiRestConfig = AgoraTokenConfig & {
 export type LlmConfig = {
   apiKey: string;
   model: string;
+  url: string;
   maxTokens: number;
   temperature: number;
   topP: number;
@@ -67,16 +68,23 @@ export function getConvoAiRestConfig(): ConvoAiRestConfig {
 }
 
 export function getConvoAiAgentConfig(): ConvoAiAgentConfig {
-  const ttsVendor = (optionalEnv("TTS_VENDOR") ?? "microsoft") as TtsVendor;
-
-  const llmApiKey = 
-    optionalEnv("GEMINI_API_KEY") ?? 
-    optionalEnv("LLM_API_KEY") ?? 
-    requireEnv("GOOGLE_API_KEY");
+  const llmApiKey =
+    optionalEnv("GEMINI_API_KEY")?.trim() ??
+    optionalEnv("LLM_API_KEY")?.trim() ??
+    requireEnv("GOOGLE_API_KEY").trim();
+  const llmModel = (optionalEnv("GEMINI_MODEL") ?? optionalEnv("LLM_MODEL") ?? "gemini-2.0-flash").trim();
+  const defaultLlmUrl =
+    `https://generativelanguage.googleapis.com/v1beta/models/${llmModel}:streamGenerateContent?alt=sse&key=${llmApiKey}`;
+  const rawLlmUrl = optionalEnv("LLM_URL")?.trim();
+  const llmUrl =
+    rawLlmUrl && !rawLlmUrl.includes("${")
+      ? rawLlmUrl.replace(":generateContent?alt=sse", ":streamGenerateContent?alt=sse")
+      : defaultLlmUrl;
 
   const llm: LlmConfig = {
     apiKey: llmApiKey,
-    model: optionalEnv("GEMINI_MODEL") ?? optionalEnv("LLM_MODEL") ?? "gemini-2.0-flash",
+    model: llmModel,
+    url: llmUrl,
     maxTokens: envNumber("LLM_MAX_TOKENS", 1000),
     temperature: envNumber("LLM_TEMPERATURE", 0.7),
     topP: envNumber("LLM_TOP_P", 0.9),
@@ -85,16 +93,16 @@ export function getConvoAiAgentConfig(): ConvoAiAgentConfig {
   const tts: TtsConfig = 
       {
           vendor: "minimax",
-          key: requireEnv("MINIMAX_TTS_KEY"),
-          model: optionalEnv("MINIMAX_TTS_MODEL") ?? "speech-02-turbo",
-          url: optionalEnv("MINIMAX_TTS_URL") ?? "wss://api-uw.minimax.io/ws/v1/t2a_v2",
-          voiceId: requireEnv("MINIMAX_TTS_VOICE_ID"),
+          key: requireEnv("MINIMAX_TTS_KEY").trim(),
+          model: (optionalEnv("MINIMAX_TTS_MODEL") ?? "speech-02-turbo").trim(),
+          url: (optionalEnv("MINIMAX_TTS_URL") ?? "wss://api-uw.minimax.io/ws/v1/t2a_v2").trim(),
+          voiceId: requireEnv("MINIMAX_TTS_VOICE_ID").trim(),
           speed: envNumber("MINIMAX_TTS_SPEED", 1.0),
           volume: envNumber("MINIMAX_TTS_VOLUME", 1.0),
           pitch: envNumber("MINIMAX_TTS_PITCH", 0),
-          emotion: optionalEnv("MINIMAX_TTS_EMOTION") ?? "neutral",
+          emotion: (optionalEnv("MINIMAX_TTS_EMOTION") ?? "neutral").trim(),
           sampleRate: envNumber("MINIMAX_TTS_SAMPLE_RATE", 48000),
-          groupId: optionalEnv("MINIMAX_TTS_GROUP_ID"),
+          groupId: optionalEnv("MINIMAX_TTS_GROUP_ID")?.trim() ?? optionalEnv("MINIMAX_GROUP_ID")?.trim(),
         }
 
   return { llm, tts };

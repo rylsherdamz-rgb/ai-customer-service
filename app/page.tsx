@@ -132,7 +132,18 @@ export default function Home() {
         },
         {
           onTranscript: (evt) => {
-            setTranscript((prev) => [...prev, evt]);
+            setTranscript((prev) => {
+              const existingIndex = prev.findIndex(
+                (entry) => entry.id === evt.id && entry.publisher === evt.publisher
+              );
+              if (existingIndex === -1) {
+                return [...prev, evt];
+              }
+
+              const next = [...prev];
+              next[existingIndex] = evt;
+              return next;
+            });
           },
           onStatus: (s) => pushStatus(s),
         }
@@ -214,7 +225,7 @@ export default function Home() {
                   muted ? "bg-red-50 border-red-100 text-red-600" : "border-gray-200 hover:bg-gray-50"
                 }`}
               >
-                {muted ? "Unmuted" : "Mute"}
+                {muted ? "Unmute" : "Mute"}
               </button>
               <button
                 onClick={handleStop}
